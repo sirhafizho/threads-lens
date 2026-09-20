@@ -54,7 +54,7 @@ tlens post https://www.threads.com/@user/post/ABC123
 |------|-------------|
 | `--count N` | Max posts to analyze (default: 10-15) |
 | `--report` | Generate full virality report after collection |
-| `--provider kimi` | Vision model: kimi (default), glm, gemini |
+| `--provider kimi` | Vision model: kimi (default), glm |
 | `--headless` | Run browser headless (no visible window) |
 
 ## Human-in-the-Loop
@@ -63,7 +63,7 @@ When the agent hits an issue (login wall, CAPTCHA, popup):
 
 ```
 ⚠ ISSUE DETECTED: login_wall
-  Screenshot saved: output/screenshots/issue_login_wall_....png
+  Screenshot saved: ~/.threads-lens/screenshots/issue_login_wall_....png
   Threads is asking for login.
   The browser window should be visible — please log in manually.
   Once you're logged in, press Enter here to continue.
@@ -87,14 +87,16 @@ You fix it in the visible browser, press Enter, and the agent continues.
 
 ## Output
 
-All data saved as markdown in `output/`:
+All data saved under `~/.threads-lens/`:
 
 ```
-output/
-├── screenshots/           # Raw screenshots
-├── search_<topic>_<ts>/   # Per-session data
-│   └── data.md            # Structured post data
-└── report_<name>_<ts>.md  # Analysis reports
+~/.threads-lens/
+├── chrome-profile/         # Persistent login session
+├── screenshots/            # Raw screenshots
+├── sessions/               # Per-session data
+│   └── search_<topic>_<ts>/
+│       └── data.md         # Structured post data
+└── logs/                   # Debug logs
 ```
 
 ## Vision Models

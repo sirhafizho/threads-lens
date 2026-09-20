@@ -1,17 +1,21 @@
-"""Playwright browser manager with persistent Chrome profile and human-in-the-loop."""
+"""Playwright browser manager with persistent Chrome profile and human-in-the-loop.
 
+Uses async Playwright API — works both in CLI (via asyncio.run) and MCP contexts.
+"""
+
+import asyncio
 import os
 import time
 from pathlib import Path
 
-from playwright.sync_api import sync_playwright, Page, BrowserContext
+from playwright.async_api import async_playwright, Page, BrowserContext
 from rich.console import Console
 
 console = Console()
 
 # Dedicated Chrome profile for Threads Lens — stays logged in between sessions
 PROFILE_DIR = Path.home() / ".threads-lens" / "chrome-profile"
-SCREENSHOT_DIR = Path(__file__).parent.parent / "output" / "screenshots"  # resolved at import
+SCREENSHOT_DIR = Path.home() / ".threads-lens" / "screenshots"
 
 
 class ThreadsBrowser:
@@ -25,10 +29,10 @@ class ThreadsBrowser:
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
-    def start(self) -> Page:
+    async def start(self) -> Page:
         """Launch browser with persistent profile. Returns the main page."""
-        self.playwright = sync_playwright().start()
-        self.context = self.playwright.chromium.launch_persistent_context(
+        self.playwright = await async_playwright().start()
+        self.context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
             viewport={"width": 1280, "height": 900},
@@ -36,51 +40,51 @@ class ThreadsBrowser:
                 "--disable-blink-features=AutomationControlled",
             ],
         )
-        self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+        self.page = self.context.pages[0] if self.context.pages else await self.context.new_page()
         return self.page
 
-    def stop(self):
+    async def stop(self):
         """Clean shutdown."""
         if self.context:
-            self.context.close()
+            await self.context.close()
         if self.playwright:
-            self.playwright.stop()
+            await self.playwright.stop()
 
-    def goto(self, url: str, wait: float = 3.0) -> bool:
+    async def goto(self, url: str, wait: float = 3.0) -> bool:
         """Navigate to a URL. Returns True if page loaded."""
         try:
-            self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            time.sleep(wait)
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            await asyncio.sleep(wait)
             return True
         except Exception as e:
             console.print(f"  [red]Navigation failed: {e}[/red]")
             return False
 
-    def screenshot(self, name: str = "screenshot") -> str:
+    async def screenshot(self, name: str = "screenshot") -> str:
         """Take a screenshot of the current page. Returns file path."""
         ts = time.strftime("%Y%m%d_%H%M%S")
         path = SCREENSHOT_DIR / f"{name}_{ts}.png"
-        self.page.screenshot(path=str(path), full_page=False)
+        await self.page.screenshot(path=str(path), full_page=False)
         return str(path)
 
-    def screenshot_post(self, name: str = "post") -> str:
+    async def screenshot_post(self, name: str = "post") -> str:
         """Screenshot the viewport area showing a post."""
         ts = time.strftime("%Y%m%d_%H%M%S_%f")[:-3]
         path = SCREENSHOT_DIR / f"{name}_{ts}.png"
-        self.page.screenshot(path=str(path), full_page=False)
+        await self.page.screenshot(path=str(path), full_page=False)
         return str(path)
 
-    def scroll_down(self, amount: int = 800):
+    async def scroll_down(self, amount: int = 800):
         """Scroll the page down."""
-        self.page.mouse.wheel(0, amount)
-        time.sleep(1.5)
+        await self.page.mouse.wheel(0, amount)
+        await asyncio.sleep(1.5)
 
-    def get_post_links(self) -> list[str]:
+    async def get_post_links(self) -> list[str]:
         """Extract all post URLs currently visible on the page."""
-        links = self.page.query_selector_all('a[href*="/post/"]')
+        links = await self.page.query_selector_all('a[href*="/post/"]')
         urls = []
         for link in links:
-            href = link.get_attribute("href")
+            href = await link.get_attribute("href")
             if href:
                 if href.startswith("/"):
                     href = f"https://www.threads.com{href}"
@@ -88,32 +92,55 @@ class ThreadsBrowser:
                     urls.append(href)
         return urls
 
-    def check_for_issues(self) -> str | None:
+    async def check_for_issues(self) -> str | None:
         """Check page for common issues. Returns issue description or None."""
         url = self.page.url
-        content = self.page.content().lower()
+        content = (await self.page.content()).lower()
 
         if "log in" in content and ("sign up" in content or "create account" in content):
-            # Check if it's blocking the content
-            login_elements = self.page.query_selector_all(
+            login_elements = await self.page.query_selector_all(
                 'div[role="dialog"], div[class*="login"], div[class*="Login"]'
             )
             if login_elements:
                 return "login_wall"
 
-        if "captcha" in content or "verify" in content.lower():
+        if "captcha" in content or "verify" in content:
             return "captcha"
 
         if "something went wrong" in content or "error" in url:
             return "error_page"
 
-        if self.page.query_selector_all('div[role="dialog"]'):
+        dialogs = await self.page.query_selector_all('div[role="dialog"]')
+        if dialogs:
             return "popup_dialog"
 
         return None
 
-    def wait_for_human(self, issue: str, screenshot_path: str):
-        """Pause and wait for the human to fix an issue."""
+    async def check_and_report_issue(self) -> dict | None:
+        """Non-blocking issue check for MCP mode. Returns issue info dict or None."""
+        issue = await self.check_for_issues()
+        if not issue:
+            return None
+        screenshot_path = await self.screenshot(f"issue_{issue}")
+        return {
+            "issue": issue,
+            "screenshot": screenshot_path,
+            "url": self.page.url,
+            "message": self._issue_message(issue),
+        }
+
+    def _issue_message(self, issue: str) -> str:
+        """Human-readable message for each issue type."""
+        messages = {
+            "login_wall": "Threads is asking for login. A browser window is open — please log in, then ask me to retry.",
+            "captcha": "CAPTCHA detected. Please solve it in the browser window, then ask me to retry.",
+            "popup_dialog": "A popup is blocking the view. Dismiss it in the browser, then ask me to retry.",
+            "error_page": "The page failed to load. Check the browser window, then ask me to retry.",
+        }
+        return messages.get(issue, f"Issue detected: {issue}. Check the browser and ask me to retry.")
+
+    async def wait_for_human(self, issue: str, screenshot_path: str):
+        """Pause and wait for the human to fix an issue (CLI mode only)."""
         console.print()
         console.print(
             f"[bold red]⚠ ISSUE DETECTED: {issue}[/bold red]"
@@ -143,51 +170,30 @@ class ThreadsBrowser:
             )
 
         try:
-            input("  [Press Enter when ready] > ")
+            # Run input() in executor to not block the event loop
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: input("  [Press Enter when ready] > "))
         except (EOFError, KeyboardInterrupt):
             raise InterruptedError("User aborted")
 
-        time.sleep(1)
+        await asyncio.sleep(1)
 
-    def check_and_report_issue(self) -> dict | None:
-        """Non-blocking issue check for MCP mode. Returns issue info dict or None."""
-        issue = self.check_for_issues()
-        if not issue:
-            return None
-        screenshot_path = self.screenshot(f"issue_{issue}")
-        return {
-            "issue": issue,
-            "screenshot": screenshot_path,
-            "url": self.page.url,
-            "message": self._issue_message(issue),
-        }
-
-    def _issue_message(self, issue: str) -> str:
-        """Human-readable message for each issue type."""
-        messages = {
-            "login_wall": "Threads is asking for login. A browser window is open — please log in, then ask me to retry.",
-            "captcha": "CAPTCHA detected. Please solve it in the browser window, then ask me to retry.",
-            "popup_dialog": "A popup is blocking the view. Dismiss it in the browser, then ask me to retry.",
-            "error_page": "The page failed to load. Check the browser window, then ask me to retry.",
-        }
-        return messages.get(issue, f"Issue detected: {issue}. Check the browser and ask me to retry.")
-
-    def ensure_healthy(self, max_retries: int = 3):
+    async def ensure_healthy(self, max_retries: int = 3):
         """Check for issues and let the human fix them. Retries up to max_retries."""
         for attempt in range(max_retries):
-            issue = self.check_for_issues()
+            issue = await self.check_for_issues()
             if not issue:
                 return True
 
-            screenshot_path = self.screenshot(f"issue_{issue}")
-            self.wait_for_human(issue, screenshot_path)
+            screenshot_path = await self.screenshot(f"issue_{issue}")
+            await self.wait_for_human(issue, screenshot_path)
 
         console.print("[red]Max retries reached. Continuing anyway...[/red]")
         return False
 
 
-def get_browser(headless: bool = False) -> ThreadsBrowser:
+async def get_browser(headless: bool = False) -> ThreadsBrowser:
     """Create and start a ThreadsBrowser instance."""
     browser = ThreadsBrowser(headless=headless)
-    browser.start()
+    await browser.start()
     return browser

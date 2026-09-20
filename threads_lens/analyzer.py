@@ -12,7 +12,7 @@ from rich.panel import Panel
 from .vision import PROVIDERS, get_api_key
 
 console = Console()
-OUTPUT_DIR = Path(__file__).parent.parent / "output"
+OUTPUT_DIR = Path.home() / ".threads-lens" / "sessions"
 
 ANALYSIS_PROMPT = """You are a Threads virality analyst. You've been given structured data extracted from real Threads posts via screenshot analysis.
 

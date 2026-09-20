@@ -1,7 +1,10 @@
 """Threads Lens — AI agent that reads Threads via Playwright screenshots + LLM vision."""
 
+import asyncio
+
 import click
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.panel import Panel
 
 from .analyzer import display_stats, generate_report, quick_stats
@@ -56,25 +59,22 @@ def research(ctx, query, count, report):
             title="[bold green]Research Mode[/bold green]",
         )
     )
+    asyncio.run(_research(provider, headless, query, count, report))
 
-    browser = get_browser(headless=headless)
+
+async def _research(provider, headless, query, count, report):
+    browser = await get_browser(headless=headless)
     try:
-        session = search_and_collect(browser, query, max_posts=count, provider=provider)
-
-        # Quick stats
+        session = await search_and_collect(browser, query, max_posts=count, provider=provider)
         stats = quick_stats(session.posts)
         display_stats(stats)
-
-        # Full report
         if report and session.posts:
             console.print("\n[bold]Generating virality report...[/bold]")
             report_md = generate_report(session.posts, session.session_name, provider)
             console.print(Panel(Markdown(report_md[:3000]), title="Report Preview"))
-
         console.print(f"\n[bold green]Done![/bold green] Data saved to: {session.session_dir}")
-
     finally:
-        browser.stop()
+        await browser.stop()
 
 
 @main.command()
@@ -95,23 +95,22 @@ def trending(ctx, count, report):
             title="[bold green]Trending Mode[/bold green]",
         )
     )
+    asyncio.run(_trending(provider, headless, count, report))
 
-    browser = get_browser(headless=headless)
+
+async def _trending(provider, headless, count, report):
+    browser = await get_browser(headless=headless)
     try:
-        session = browse_trending(browser, max_posts=count, provider=provider)
-
+        session = await browse_trending(browser, max_posts=count, provider=provider)
         stats = quick_stats(session.posts)
         display_stats(stats)
-
         if report and session.posts:
             console.print("\n[bold]Generating virality report...[/bold]")
             report_md = generate_report(session.posts, session.session_name, provider)
             console.print(Panel(Markdown(report_md[:3000]), title="Report Preview"))
-
         console.print(f"\n[bold green]Done![/bold green] Data saved to: {session.session_dir}")
-
     finally:
-        browser.stop()
+        await browser.stop()
 
 
 @main.command()
@@ -134,23 +133,22 @@ def profile(ctx, username, count, report):
             title="[bold green]Profile Analysis[/bold green]",
         )
     )
+    asyncio.run(_profile(provider, headless, username, count, report))
 
-    browser = get_browser(headless=headless)
+
+async def _profile(provider, headless, username, count, report):
+    browser = await get_browser(headless=headless)
     try:
-        session = analyze_profile(browser, username, max_posts=count, provider=provider)
-
+        session = await analyze_profile(browser, username, max_posts=count, provider=provider)
         stats = quick_stats(session.posts)
         display_stats(stats)
-
         if report and session.posts:
             console.print("\n[bold]Generating profile report...[/bold]")
             report_md = generate_report(session.posts, session.session_name, provider)
             console.print(Panel(Markdown(report_md[:3000]), title="Report Preview"))
-
         console.print(f"\n[bold green]Done![/bold green] Data saved to: {session.session_dir}")
-
     finally:
-        browser.stop()
+        await browser.stop()
 
 
 @main.command()
@@ -162,22 +160,25 @@ def post(ctx, url, save):
     console.print(BANNER)
     provider = ctx.obj["provider"]
     headless = ctx.obj["headless"]
+    asyncio.run(_post(provider, headless, url))
 
-    browser = get_browser(headless=headless)
+
+async def _post(provider, headless, url):
+    from .vision import analyze_screenshot as vision_analyze
+
+    browser = await get_browser(headless=headless)
     try:
-        if not browser.goto(url, wait=3):
+        if not await browser.goto(url, wait=3):
             console.print("[red]Failed to load post[/red]")
             return
 
-        browser.ensure_healthy()
+        await browser.ensure_healthy()
 
-        screenshot = browser.screenshot_post("single_post")
+        screenshot = await browser.screenshot_post("single_post")
         console.print(f"  Screenshot: {screenshot}")
 
-        from .vision import analyze_screenshot
-
         with console.status("Analyzing with vision model..."):
-            data = analyze_screenshot(screenshot, provider)
+            data = await asyncio.to_thread(vision_analyze, screenshot, provider)
 
         if "error" in data:
             console.print(f"[red]Error: {data['error']}[/red]")
@@ -195,9 +196,8 @@ def post(ctx, url, save):
                 f"Hook: {data.get('hook_type', '?')}",
                 title="[bold cyan]Post Analysis[/bold cyan]",
             ))
-
     finally:
-        browser.stop()
+        await browser.stop()
 
 
 if __name__ == "__main__":

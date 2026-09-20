@@ -1,5 +1,6 @@
 """Post collector — navigates Threads, screenshots posts, extracts data via vision."""
 
+import asyncio
 import json
 import time
 from datetime import datetime
@@ -13,7 +14,7 @@ from .browser import ThreadsBrowser
 from .vision import analyze_screenshot, check_page_type
 
 console = Console()
-OUTPUT_DIR = Path(__file__).parent.parent / "output"
+OUTPUT_DIR = Path.home() / ".threads-lens" / "sessions"
 
 
 class CollectionResult:
@@ -91,39 +92,48 @@ class CollectionResult:
         return str(md_path)
 
 
-def _check_issue(browser: ThreadsBrowser, session: CollectionResult, interactive: bool) -> bool:
-    """Check for browser issues. Returns True if OK to continue.
-
-    In interactive mode: blocks and waits for human to fix.
-    In non-interactive mode: sets session.pending_issue and returns False.
-    """
+async def _check_issue(browser: ThreadsBrowser, session: CollectionResult, interactive: bool) -> bool:
+    """Check for browser issues. Returns True if OK to continue."""
     if interactive:
-        browser.ensure_healthy()
+        await browser.ensure_healthy()
         return True
-    issue = browser.check_and_report_issue()
+    issue = await browser.check_and_report_issue()
     if issue:
         session.pending_issue = issue
         return False
     return True
 
 
-def _handle_post_issue(browser: ThreadsBrowser, session: CollectionResult, interactive: bool) -> bool:
+async def _handle_post_issue(browser: ThreadsBrowser, session: CollectionResult, interactive: bool) -> bool:
     """Handle per-post issue. Returns True if OK to continue."""
-    issue = browser.check_for_issues()
+    issue = await browser.check_for_issues()
     if not issue:
         return True
     if interactive:
-        screenshot = browser.screenshot(f"issue_{issue}")
+        screenshot = await browser.screenshot(f"issue_{issue}")
         try:
-            browser.wait_for_human(issue, screenshot)
+            await browser.wait_for_human(issue, screenshot)
             return True
         except InterruptedError:
             return False
-    session.pending_issue = browser.check_and_report_issue()
+    session.pending_issue = await browser.check_and_report_issue()
     return False
 
 
-def search_and_collect(
+async def _analyze(screenshot: str, provider: str, label: str = "Analyzing...") -> dict:
+    """Run vision analysis with a spinner."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task(f"  {label}", total=None)
+        data = await asyncio.to_thread(analyze_screenshot, screenshot, provider)
+        progress.update(task, description="[green]Done!")
+    return data
+
+
+async def search_and_collect(
     browser: ThreadsBrowser,
     query: str,
     max_posts: int = 10,
@@ -139,39 +149,36 @@ def search_and_collect(
 
     console.print(f"\n[bold]Searching Threads for: '{query}'[/bold]")
 
-    # Navigate to search
     search_url = f"https://www.threads.com/search?q={query}&serp_type=default"
-    if not browser.goto(search_url, wait=4):
+    if not await browser.goto(search_url, wait=4):
         console.print("[red]Failed to load search page[/red]")
         return session
 
-    # Human-in-the-loop: check for issues
-    if not _check_issue(browser, session, interactive):
+    if not await _check_issue(browser, session, interactive):
         return session
 
-    # Scroll to load more posts
     all_urls = []
     for round_num in range(scroll_rounds):
-        urls = browser.get_post_links()
+        urls = await browser.get_post_links()
         for u in urls:
             if u not in all_urls:
                 all_urls.append(u)
         console.print(f"  Scroll {round_num + 1}: found {len(all_urls)} post URLs so far")
         if len(all_urls) >= max_posts:
             break
-        browser.scroll_down()
+        await browser.scroll_down()
 
     if not all_urls:
         console.print("[yellow]No post links found. The page might need login.[/yellow]")
-        screenshot = browser.screenshot("no_results")
-        page_type = check_page_type(screenshot, provider)
+        screenshot = await browser.screenshot("no_results")
+        page_type = await asyncio.to_thread(check_page_type, screenshot, provider)
         console.print(f"  Page type detected: {page_type}")
         if page_type in ("login", "popup"):
             if interactive:
-                browser.ensure_healthy()
-                all_urls = browser.get_post_links()
+                await browser.ensure_healthy()
+                all_urls = await browser.get_post_links()
             else:
-                session.pending_issue = browser.check_and_report_issue() or {
+                session.pending_issue = await browser.check_and_report_issue() or {
                     "issue": "no_posts_found",
                     "screenshot": screenshot,
                     "message": "No posts found — may need login. Check the browser window.",
@@ -180,29 +187,18 @@ def search_and_collect(
 
     console.print(f"\n[bold]Collecting {min(len(all_urls), max_posts)} posts[/bold]")
 
-    # Visit each post and analyze
     for i, url in enumerate(all_urls[:max_posts]):
         console.print(f"\n  [{i + 1}/{min(len(all_urls), max_posts)}] {url}")
 
-        if not browser.goto(url, wait=3):
+        if not await browser.goto(url, wait=3):
             session.add_error(url, "navigation_failed")
             continue
 
-        if not _handle_post_issue(browser, session, interactive):
+        if not await _handle_post_issue(browser, session, interactive):
             break
 
-        # Screenshot the post
-        screenshot = browser.screenshot_post(f"post_{i + 1}")
-
-        # Vision extraction
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("  Analyzing with vision model...", total=None)
-            data = analyze_screenshot(screenshot, provider)
-            progress.update(task, description="[green]Done!")
+        screenshot = await browser.screenshot_post(f"post_{i + 1}")
+        data = await _analyze(screenshot, provider, "Analyzing with vision model...")
 
         if "error" in data or data.get("parse_error"):
             console.print(f"    [yellow]Extraction issue: {data.get('error', 'parse error')}[/yellow]")
@@ -210,19 +206,15 @@ def search_and_collect(
             if "raw_response" in data:
                 session.add_post(data, url, screenshot)
         else:
-            likes = data.get("likes", "?")
-            replies = data.get("replies", "?")
-            author = data.get("author_username", "?")
-            console.print(f"    @{author} — {likes} likes, {replies} replies")
+            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {data.get('replies', '?')} replies")
             session.add_post(data, url, screenshot)
 
-    # Save session data
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")
     return session
 
 
-def browse_trending(
+async def browse_trending(
     browser: ThreadsBrowser,
     max_posts: int = 15,
     provider: str = "kimi",
@@ -233,29 +225,28 @@ def browse_trending(
 
     console.print("\n[bold]Browsing Threads feed for trending posts[/bold]")
 
-    if not browser.goto("https://www.threads.com/", wait=4):
+    if not await browser.goto("https://www.threads.com/", wait=4):
         console.print("[red]Failed to load Threads[/red]")
         return session
 
-    if not _check_issue(browser, session, interactive):
+    if not await _check_issue(browser, session, interactive):
         return session
 
-    # Scroll and collect post URLs from feed
     all_urls = []
     for round_num in range(5):
-        urls = browser.get_post_links()
+        urls = await browser.get_post_links()
         for u in urls:
             if u not in all_urls:
                 all_urls.append(u)
         console.print(f"  Scroll {round_num + 1}: {len(all_urls)} posts found")
         if len(all_urls) >= max_posts:
             break
-        browser.scroll_down()
+        await browser.scroll_down()
 
     if not all_urls:
         console.print("[yellow]No posts found in feed.[/yellow]")
         if not interactive:
-            session.pending_issue = browser.check_and_report_issue() or {
+            session.pending_issue = await browser.check_and_report_issue() or {
                 "issue": "no_posts_found",
                 "message": "No posts found in feed — may need login.",
             }
@@ -266,23 +257,15 @@ def browse_trending(
     for i, url in enumerate(all_urls[:max_posts]):
         console.print(f"\n  [{i + 1}/{min(len(all_urls), max_posts)}] {url}")
 
-        if not browser.goto(url, wait=3):
+        if not await browser.goto(url, wait=3):
             session.add_error(url, "navigation_failed")
             continue
 
-        if not _handle_post_issue(browser, session, interactive):
+        if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshot = browser.screenshot_post(f"trending_{i + 1}")
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("  Analyzing...", total=None)
-            data = analyze_screenshot(screenshot, provider)
-            progress.update(task, description="[green]Done!")
+        screenshot = await browser.screenshot_post(f"trending_{i + 1}")
+        data = await _analyze(screenshot, provider)
 
         if "error" not in data:
             console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes")
@@ -293,7 +276,7 @@ def browse_trending(
     return session
 
 
-def analyze_profile(
+async def analyze_profile(
     browser: ThreadsBrowser,
     username: str,
     max_posts: int = 10,
@@ -307,29 +290,28 @@ def analyze_profile(
     console.print(f"\n[bold]Analyzing profile: @{username}[/bold]")
 
     profile_url = f"https://www.threads.com/@{username}"
-    if not browser.goto(profile_url, wait=4):
+    if not await browser.goto(profile_url, wait=4):
         console.print("[red]Failed to load profile[/red]")
         return session
 
-    if not _check_issue(browser, session, interactive):
+    if not await _check_issue(browser, session, interactive):
         return session
 
-    # Scroll profile to load posts
     all_urls = []
     for round_num in range(4):
-        urls = browser.get_post_links()
+        urls = await browser.get_post_links()
         for u in urls:
             if u not in all_urls:
                 all_urls.append(u)
         console.print(f"  Scroll {round_num + 1}: {len(all_urls)} posts found")
         if len(all_urls) >= max_posts:
             break
-        browser.scroll_down()
+        await browser.scroll_down()
 
     if not all_urls:
         console.print("[yellow]No posts found on this profile.[/yellow]")
         if not interactive:
-            session.pending_issue = browser.check_and_report_issue() or {
+            session.pending_issue = await browser.check_and_report_issue() or {
                 "issue": "no_posts_found",
                 "message": f"No posts found on @{username}'s profile — may need login.",
             }
@@ -340,23 +322,15 @@ def analyze_profile(
     for i, url in enumerate(all_urls[:max_posts]):
         console.print(f"\n  [{i + 1}/{min(len(all_urls), max_posts)}] {url}")
 
-        if not browser.goto(url, wait=3):
+        if not await browser.goto(url, wait=3):
             session.add_error(url, "navigation_failed")
             continue
 
-        if not _handle_post_issue(browser, session, interactive):
+        if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshot = browser.screenshot_post(f"profile_{i + 1}")
-
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("  Analyzing...", total=None)
-            data = analyze_screenshot(screenshot, provider)
-            progress.update(task, description="[green]Done!")
+        screenshot = await browser.screenshot_post(f"profile_{i + 1}")
+        data = await _analyze(screenshot, provider)
 
         if "error" not in data:
             console.print(f"    {data.get('likes', '?')} likes, {data.get('replies', '?')} replies")
