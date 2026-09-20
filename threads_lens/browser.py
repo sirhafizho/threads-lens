@@ -149,6 +149,29 @@ class ThreadsBrowser:
 
         time.sleep(1)
 
+    def check_and_report_issue(self) -> dict | None:
+        """Non-blocking issue check for MCP mode. Returns issue info dict or None."""
+        issue = self.check_for_issues()
+        if not issue:
+            return None
+        screenshot_path = self.screenshot(f"issue_{issue}")
+        return {
+            "issue": issue,
+            "screenshot": screenshot_path,
+            "url": self.page.url,
+            "message": self._issue_message(issue),
+        }
+
+    def _issue_message(self, issue: str) -> str:
+        """Human-readable message for each issue type."""
+        messages = {
+            "login_wall": "Threads is asking for login. A browser window is open — please log in, then ask me to retry.",
+            "captcha": "CAPTCHA detected. Please solve it in the browser window, then ask me to retry.",
+            "popup_dialog": "A popup is blocking the view. Dismiss it in the browser, then ask me to retry.",
+            "error_page": "The page failed to load. Check the browser window, then ask me to retry.",
+        }
+        return messages.get(issue, f"Issue detected: {issue}. Check the browser and ask me to retry.")
+
     def ensure_healthy(self, max_retries: int = 3):
         """Check for issues and let the human fix them. Retries up to max_retries."""
         for attempt in range(max_retries):

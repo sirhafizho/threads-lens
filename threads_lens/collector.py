@@ -26,6 +26,7 @@ class CollectionResult:
         self.started_at = datetime.now().isoformat()
         self.session_dir = OUTPUT_DIR / session_name
         self.session_dir.mkdir(parents=True, exist_ok=True)
+        self.pending_issue: dict | None = None  # set when human-in-the-loop is needed
 
     def add_post(self, data: dict, url: str, screenshot: str):
         data["_url"] = url
@@ -90,12 +91,45 @@ class CollectionResult:
         return str(md_path)
 
 
+def _check_issue(browser: ThreadsBrowser, session: CollectionResult, interactive: bool) -> bool:
+    """Check for browser issues. Returns True if OK to continue.
+
+    In interactive mode: blocks and waits for human to fix.
+    In non-interactive mode: sets session.pending_issue and returns False.
+    """
+    if interactive:
+        browser.ensure_healthy()
+        return True
+    issue = browser.check_and_report_issue()
+    if issue:
+        session.pending_issue = issue
+        return False
+    return True
+
+
+def _handle_post_issue(browser: ThreadsBrowser, session: CollectionResult, interactive: bool) -> bool:
+    """Handle per-post issue. Returns True if OK to continue."""
+    issue = browser.check_for_issues()
+    if not issue:
+        return True
+    if interactive:
+        screenshot = browser.screenshot(f"issue_{issue}")
+        try:
+            browser.wait_for_human(issue, screenshot)
+            return True
+        except InterruptedError:
+            return False
+    session.pending_issue = browser.check_and_report_issue()
+    return False
+
+
 def search_and_collect(
     browser: ThreadsBrowser,
     query: str,
     max_posts: int = 10,
     provider: str = "kimi",
     scroll_rounds: int = 3,
+    interactive: bool = True,
 ) -> CollectionResult:
     """Search Threads for a topic and collect post data.
 
@@ -112,7 +146,8 @@ def search_and_collect(
         return session
 
     # Human-in-the-loop: check for issues
-    browser.ensure_healthy()
+    if not _check_issue(browser, session, interactive):
+        return session
 
     # Scroll to load more posts
     all_urls = []
@@ -132,9 +167,16 @@ def search_and_collect(
         page_type = check_page_type(screenshot, provider)
         console.print(f"  Page type detected: {page_type}")
         if page_type in ("login", "popup"):
-            browser.ensure_healthy()
-            # Retry after user fixes
-            all_urls = browser.get_post_links()
+            if interactive:
+                browser.ensure_healthy()
+                all_urls = browser.get_post_links()
+            else:
+                session.pending_issue = browser.check_and_report_issue() or {
+                    "issue": "no_posts_found",
+                    "screenshot": screenshot,
+                    "message": "No posts found — may need login. Check the browser window.",
+                }
+                return session
 
     console.print(f"\n[bold]Collecting {min(len(all_urls), max_posts)} posts[/bold]")
 
@@ -146,14 +188,8 @@ def search_and_collect(
             session.add_error(url, "navigation_failed")
             continue
 
-        # Check for issues
-        issue = browser.check_for_issues()
-        if issue:
-            screenshot = browser.screenshot(f"issue_{issue}")
-            try:
-                browser.wait_for_human(issue, screenshot)
-            except InterruptedError:
-                break
+        if not _handle_post_issue(browser, session, interactive):
+            break
 
         # Screenshot the post
         screenshot = browser.screenshot_post(f"post_{i + 1}")
@@ -190,6 +226,7 @@ def browse_trending(
     browser: ThreadsBrowser,
     max_posts: int = 15,
     provider: str = "kimi",
+    interactive: bool = True,
 ) -> CollectionResult:
     """Browse the Threads feed and collect trending posts."""
     session = CollectionResult(f"trending_{int(time.time())}")
@@ -200,7 +237,8 @@ def browse_trending(
         console.print("[red]Failed to load Threads[/red]")
         return session
 
-    browser.ensure_healthy()
+    if not _check_issue(browser, session, interactive):
+        return session
 
     # Scroll and collect post URLs from feed
     all_urls = []
@@ -216,6 +254,11 @@ def browse_trending(
 
     if not all_urls:
         console.print("[yellow]No posts found in feed.[/yellow]")
+        if not interactive:
+            session.pending_issue = browser.check_and_report_issue() or {
+                "issue": "no_posts_found",
+                "message": "No posts found in feed — may need login.",
+            }
         return session
 
     console.print(f"\n[bold]Analyzing {min(len(all_urls), max_posts)} posts[/bold]")
@@ -227,13 +270,8 @@ def browse_trending(
             session.add_error(url, "navigation_failed")
             continue
 
-        issue = browser.check_for_issues()
-        if issue:
-            screenshot = browser.screenshot(f"issue_{issue}")
-            try:
-                browser.wait_for_human(issue, screenshot)
-            except InterruptedError:
-                break
+        if not _handle_post_issue(browser, session, interactive):
+            break
 
         screenshot = browser.screenshot_post(f"trending_{i + 1}")
 
@@ -260,6 +298,7 @@ def analyze_profile(
     username: str,
     max_posts: int = 10,
     provider: str = "kimi",
+    interactive: bool = True,
 ) -> CollectionResult:
     """Analyze a specific user's recent posts."""
     username = username.lstrip("@")
@@ -272,7 +311,8 @@ def analyze_profile(
         console.print("[red]Failed to load profile[/red]")
         return session
 
-    browser.ensure_healthy()
+    if not _check_issue(browser, session, interactive):
+        return session
 
     # Scroll profile to load posts
     all_urls = []
@@ -288,6 +328,11 @@ def analyze_profile(
 
     if not all_urls:
         console.print("[yellow]No posts found on this profile.[/yellow]")
+        if not interactive:
+            session.pending_issue = browser.check_and_report_issue() or {
+                "issue": "no_posts_found",
+                "message": f"No posts found on @{username}'s profile — may need login.",
+            }
         return session
 
     console.print(f"\n[bold]Analyzing {min(len(all_urls), max_posts)} posts[/bold]")
@@ -299,13 +344,8 @@ def analyze_profile(
             session.add_error(url, "navigation_failed")
             continue
 
-        issue = browser.check_for_issues()
-        if issue:
-            screenshot = browser.screenshot(f"issue_{issue}")
-            try:
-                browser.wait_for_human(issue, screenshot)
-            except InterruptedError:
-                break
+        if not _handle_post_issue(browser, session, interactive):
+            break
 
         screenshot = browser.screenshot_post(f"profile_{i + 1}")
 
