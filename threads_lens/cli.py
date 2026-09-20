@@ -42,9 +42,9 @@ def main(ctx, provider, headless):
 @main.command()
 @click.argument("query")
 @click.option("--count", "-n", default=10, help="Max posts to analyze")
-@click.option("--report", "-r", is_flag=True, help="Generate full report after collection")
+@click.option("--no-summary", is_flag=True, help="Skip the LLM summary report")
 @click.pass_context
-def research(ctx, query, count, report):
+def research(ctx, query, count, no_summary):
     """Research a topic on Threads — search, screenshot, analyze."""
     console.print(BANNER)
     provider = ctx.obj["provider"]
@@ -59,19 +59,19 @@ def research(ctx, query, count, report):
             title="[bold green]Research Mode[/bold green]",
         )
     )
-    asyncio.run(_research(provider, headless, query, count, report))
+    asyncio.run(_research(provider, headless, query, count, no_summary))
 
 
-async def _research(provider, headless, query, count, report):
+async def _research(provider, headless, query, count, no_summary):
     browser = await get_browser(headless=headless)
     try:
         session = await search_and_collect(browser, query, max_posts=count, provider=provider)
         stats = quick_stats(session.posts)
         display_stats(stats)
-        if report and session.posts:
-            console.print("\n[bold]Generating virality report...[/bold]")
+        if not no_summary and session.posts:
+            console.print("\n[bold]Generating summary...[/bold]")
             report_md = generate_report(session.posts, session.session_name, provider)
-            console.print(Panel(Markdown(report_md[:3000]), title="Report Preview"))
+            console.print(Markdown(report_md))
         console.print(f"\n[bold green]Done![/bold green] Data saved to: {session.session_dir}")
     finally:
         await browser.stop()
@@ -79,9 +79,9 @@ async def _research(provider, headless, query, count, report):
 
 @main.command()
 @click.option("--count", "-n", default=15, help="Max posts to analyze")
-@click.option("--report", "-r", is_flag=True, help="Generate full report after collection")
+@click.option("--no-summary", is_flag=True, help="Skip the LLM summary report")
 @click.pass_context
-def trending(ctx, count, report):
+def trending(ctx, count, no_summary):
     """Browse Threads feed and analyze trending posts."""
     console.print(BANNER)
     provider = ctx.obj["provider"]
@@ -95,19 +95,19 @@ def trending(ctx, count, report):
             title="[bold green]Trending Mode[/bold green]",
         )
     )
-    asyncio.run(_trending(provider, headless, count, report))
+    asyncio.run(_trending(provider, headless, count, no_summary))
 
 
-async def _trending(provider, headless, count, report):
+async def _trending(provider, headless, count, no_summary):
     browser = await get_browser(headless=headless)
     try:
         session = await browse_trending(browser, max_posts=count, provider=provider)
         stats = quick_stats(session.posts)
         display_stats(stats)
-        if report and session.posts:
-            console.print("\n[bold]Generating virality report...[/bold]")
+        if not no_summary and session.posts:
+            console.print("\n[bold]Generating summary...[/bold]")
             report_md = generate_report(session.posts, session.session_name, provider)
-            console.print(Panel(Markdown(report_md[:3000]), title="Report Preview"))
+            console.print(Markdown(report_md))
         console.print(f"\n[bold green]Done![/bold green] Data saved to: {session.session_dir}")
     finally:
         await browser.stop()
@@ -116,9 +116,9 @@ async def _trending(provider, headless, count, report):
 @main.command()
 @click.argument("username")
 @click.option("--count", "-n", default=10, help="Max posts to analyze")
-@click.option("--report", "-r", is_flag=True, help="Generate full report after collection")
+@click.option("--no-summary", is_flag=True, help="Skip the LLM summary report")
 @click.pass_context
-def profile(ctx, username, count, report):
+def profile(ctx, username, count, no_summary):
     """Analyze a Threads user's posts — engagement patterns, best content."""
     console.print(BANNER)
     provider = ctx.obj["provider"]
@@ -133,19 +133,19 @@ def profile(ctx, username, count, report):
             title="[bold green]Profile Analysis[/bold green]",
         )
     )
-    asyncio.run(_profile(provider, headless, username, count, report))
+    asyncio.run(_profile(provider, headless, username, count, no_summary))
 
 
-async def _profile(provider, headless, username, count, report):
+async def _profile(provider, headless, username, count, no_summary):
     browser = await get_browser(headless=headless)
     try:
         session = await analyze_profile(browser, username, max_posts=count, provider=provider)
         stats = quick_stats(session.posts)
         display_stats(stats)
-        if report and session.posts:
-            console.print("\n[bold]Generating profile report...[/bold]")
+        if not no_summary and session.posts:
+            console.print("\n[bold]Generating summary...[/bold]")
             report_md = generate_report(session.posts, session.session_name, provider)
-            console.print(Panel(Markdown(report_md[:3000]), title="Report Preview"))
+            console.print(Markdown(report_md))
         console.print(f"\n[bold green]Done![/bold green] Data saved to: {session.session_dir}")
     finally:
         await browser.stop()

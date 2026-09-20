@@ -14,25 +14,33 @@ from .vision import PROVIDERS, get_api_key
 console = Console()
 OUTPUT_DIR = Path.home() / ".threads-lens" / "sessions"
 
-ANALYSIS_PROMPT = """You are a Threads virality analyst. You've been given structured data extracted from real Threads posts via screenshot analysis.
+ANALYSIS_PROMPT = """You are a Threads virality analyst. You've been given structured data extracted from real Threads posts via screenshot analysis, including post content, engagement metrics, media descriptions, and comment/discussion data.
 
 Analyze the data and produce a report with these sections:
+
+## TL;DR
+2-3 sentence summary of what's trending and why.
 
 ## Engagement Overview
 - Total posts analyzed, average metrics
 - Distribution of engagement (likes, replies, reposts, views)
 
+## What's Hot Right Now
+- The most engaging posts and why they're working
+- Which topics/themes are getting traction
+- What people are talking about in the comments
+
+## Discussion Highlights
+- Key arguments/debates happening in the replies
+- Community sentiment patterns (supportive vs hostile vs debating)
+- Notable comments worth mentioning
+
 ## What Makes Posts Go Viral
-- Patterns in high-engagement posts vs low-engagement
-- Which topics get the most traction
+- Patterns in high-engagement vs low-engagement posts
 - Hook patterns that work (questions, bold claims, how-tos)
 - Media type impact (text vs image vs video)
 - Sentiment analysis — does controversy help?
-
-## Threads Algorithm Signals
-- Reply-to-like ratio analysis (replies matter more than likes)
-- Engagement velocity indicators
-- What separates viral (>100 likes) from mid posts
+- Reply-to-like ratio analysis
 
 ## Content Recommendations
 - What topics to post about this week
@@ -40,10 +48,7 @@ Analyze the data and produce a report with these sections:
 - Specific hooks that are working
 - Topics to avoid (low engagement)
 
-## Data Table
-A summary table of all posts with their key metrics.
-
-Be specific and data-driven. Reference actual numbers from the data."""
+Be specific and data-driven. Reference actual numbers and quotes from the data."""
 
 
 def _posts_to_context(posts: list[dict]) -> str:
@@ -57,6 +62,10 @@ def _posts_to_context(posts: list[dict]) -> str:
         lines.append(f"  language: {p.get('language', '?')}")
         lines.append(f"  topic: {p.get('topic_category', '?')}")
         lines.append(f"  sentiment: {p.get('sentiment', '?')}")
+
+        media_desc = p.get("media_description")
+        if media_desc:
+            lines.append(f"  media: {p.get('media_type', '?')} — {media_desc[:200]}")
 
         metrics = []
         for k in ("views", "likes", "replies", "reposts", "shares"):
@@ -75,6 +84,20 @@ def _posts_to_context(posts: list[dict]) -> str:
             flags.append("hashtags")
         if flags:
             lines.append(f"  flags: {', '.join(flags)}")
+
+        comments = p.get("comments", [])
+        if comments:
+            lines.append(f"  comments ({len(comments)}):")
+            for c in comments:
+                likes_str = f" [{c.get('likes', 0)} likes]" if c.get("likes") else ""
+                lines.append(f"    @{c.get('author', '?')}{likes_str}: {c.get('text', '')[:150]}")
+
+        if p.get("comments_summary"):
+            lines.append(f"  discussion: {p['comments_summary']}")
+        if p.get("discussion_sentiment"):
+            lines.append(f"  discussion_sentiment: {p['discussion_sentiment']}")
+        if p.get("reply_insight"):
+            lines.append(f"  reply_insight: {p['reply_insight']}")
 
         lines.append(f"  url: {p.get('_url', 'N/A')}")
         lines.append("")
