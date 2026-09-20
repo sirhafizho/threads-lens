@@ -19,11 +19,6 @@ PROVIDERS = {
         "model": "zai.glm-5",
         "name": "GLM-5",
     },
-    "gemini": {
-        "base_url": "https://genai-nexus.api.corpinter.net/v1beta",
-        "model": "gemini-2.5-flash",
-        "name": "Gemini 2.5 Flash",
-    },
 }
 
 EXTRACTION_PROMPT = """You are analyzing a screenshot of a Threads (social media) post. Extract the following information and return ONLY valid JSON, no other text:

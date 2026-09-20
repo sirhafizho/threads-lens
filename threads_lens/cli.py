@@ -22,7 +22,7 @@ BANNER = """[bold cyan]
 
 
 @click.group(invoke_without_command=True)
-@click.option("--provider", "-p", default="kimi", help="Vision LLM: kimi, glm, gemini")
+@click.option("--provider", "-p", default="kimi", help="Vision LLM: kimi, glm")
 @click.option("--headless", is_flag=True, help="Run browser headless (no visible window)")
 @click.pass_context
 def main(ctx, provider, headless):

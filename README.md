@@ -101,9 +101,8 @@ output/
 
 | Provider | Model | Notes |
 |----------|-------|-------|
-| `kimi` (default) | Kimi K2.5 | Good all-around, via genai-nexus |
+| `kimi` (default) | Kimi K2.5 | Vision extraction, via genai-nexus |
 | `glm` | GLM-5 | Alternative |
-| `gemini` | Gemini 2.5 Flash | Fast |
 
 All via genai-nexus (OpenAI-compatible API).
 
