@@ -57,6 +57,11 @@ class CollectionResult:
             lines.append(f"- **Language:** {post.get('language', '?')}")
             lines.append(f"- **Topic:** {post.get('topic_category', '?')}")
 
+            # Media description
+            media_desc = post.get("media_description")
+            if media_desc and post.get("media_type") != "text":
+                lines.append(f"- **Media ({post.get('media_type', '?')}):** {media_desc}")
+
             metrics = []
             for key in ("views", "likes", "replies", "reposts", "shares"):
                 val = post.get(key)
@@ -78,6 +83,29 @@ class CollectionResult:
                 flags.append(f"sentiment:{post['sentiment']}")
             if flags:
                 lines.append(f"- **Flags:** {', '.join(flags)}")
+
+            # Comments / discussion
+            comments = post.get("comments", [])
+            if comments:
+                lines.append(f"- **Discussion ({len(comments)} comments captured):**")
+                for c in comments:
+                    author = c.get("author", "?")
+                    text = c.get("text", "")[:150]
+                    likes = c.get("likes")
+                    likes_str = f" ({likes:,} likes)" if likes else ""
+                    lines.append(f"  - @{author}{likes_str}: {text}")
+
+            comments_summary = post.get("comments_summary")
+            if comments_summary:
+                lines.append(f"- **Discussion Summary:** {comments_summary}")
+
+            discussion_sentiment = post.get("discussion_sentiment")
+            if discussion_sentiment and discussion_sentiment != "none":
+                lines.append(f"- **Discussion Sentiment:** {discussion_sentiment}")
+
+            reply_insight = post.get("reply_insight")
+            if reply_insight:
+                lines.append(f"- **Audience Insight:** {reply_insight}")
 
             lines.append(f"- **Screenshot:** `{post.get('_screenshot', 'N/A')}`")
             lines.append("")
@@ -120,7 +148,15 @@ async def _handle_post_issue(browser: ThreadsBrowser, session: CollectionResult,
     return False
 
 
-async def _analyze(screenshot: str, provider: str, label: str = "Analyzing...") -> dict:
+async def _capture_post_and_replies(browser: ThreadsBrowser, name: str) -> list[str]:
+    """Screenshot the post, scroll to replies, screenshot replies. Returns list of paths."""
+    paths = [await browser.screenshot_post(name)]
+    await browser.scroll_for_replies()
+    paths.append(await browser.screenshot_post(f"{name}_replies"))
+    return paths
+
+
+async def _analyze(screenshots: str | list[str], provider: str, label: str = "Analyzing...") -> dict:
     """Run vision analysis with a spinner."""
     with Progress(
         SpinnerColumn(),
@@ -128,7 +164,7 @@ async def _analyze(screenshot: str, provider: str, label: str = "Analyzing...") 
         console=console,
     ) as progress:
         task = progress.add_task(f"  {label}", total=None)
-        data = await asyncio.to_thread(analyze_screenshot, screenshot, provider)
+        data = await asyncio.to_thread(analyze_screenshot, screenshots, provider)
         progress.update(task, description="[green]Done!")
     return data
 
@@ -197,17 +233,18 @@ async def search_and_collect(
         if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshot = await browser.screenshot_post(f"post_{i + 1}")
-        data = await _analyze(screenshot, provider, "Analyzing with vision model...")
+        screenshots = await _capture_post_and_replies(browser, f"post_{i + 1}")
+        data = await _analyze(screenshots, provider, "Analyzing with vision model...")
 
         if "error" in data or data.get("parse_error"):
             console.print(f"    [yellow]Extraction issue: {data.get('error', 'parse error')}[/yellow]")
             session.add_error(url, data.get("error", "parse_error"))
             if "raw_response" in data:
-                session.add_post(data, url, screenshot)
+                session.add_post(data, url, screenshots[0])
         else:
-            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {data.get('replies', '?')} replies")
-            session.add_post(data, url, screenshot)
+            comments = len(data.get("comments", []))
+            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {data.get('replies', '?')} replies, {comments} comments read")
+            session.add_post(data, url, screenshots[0])
 
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")
@@ -264,12 +301,13 @@ async def browse_trending(
         if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshot = await browser.screenshot_post(f"trending_{i + 1}")
-        data = await _analyze(screenshot, provider)
+        screenshots = await _capture_post_and_replies(browser, f"trending_{i + 1}")
+        data = await _analyze(screenshots, provider)
 
         if "error" not in data:
-            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes")
-        session.add_post(data, url, screenshot)
+            comments = len(data.get("comments", []))
+            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {comments} comments")
+        session.add_post(data, url, screenshots[0])
 
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")
@@ -329,12 +367,13 @@ async def analyze_profile(
         if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshot = await browser.screenshot_post(f"profile_{i + 1}")
-        data = await _analyze(screenshot, provider)
+        screenshots = await _capture_post_and_replies(browser, f"profile_{i + 1}")
+        data = await _analyze(screenshots, provider)
 
         if "error" not in data:
-            console.print(f"    {data.get('likes', '?')} likes, {data.get('replies', '?')} replies")
-        session.add_post(data, url, screenshot)
+            comments = len(data.get("comments", []))
+            console.print(f"    {data.get('likes', '?')} likes, {data.get('replies', '?')} replies, {comments} comments")
+        session.add_post(data, url, screenshots[0])
 
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")

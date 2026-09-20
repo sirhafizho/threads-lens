@@ -84,6 +84,11 @@ class ThreadsBrowser:
         await self.page.mouse.wheel(0, amount)
         await asyncio.sleep(1.5)
 
+    async def scroll_for_replies(self, scrolls: int = 2):
+        """Scroll down to reveal the replies section on a post page."""
+        for _ in range(scrolls):
+            await self.scroll_down(600)
+
     async def get_post_links(self) -> list[str]:
         """Extract all post URLs currently visible on the page."""
         links = await self.page.query_selector_all('a[href*="/post/"]')

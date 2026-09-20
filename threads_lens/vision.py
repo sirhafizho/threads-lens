@@ -21,7 +21,7 @@ PROVIDERS = {
     },
 }
 
-EXTRACTION_PROMPT = """You are analyzing a screenshot of a Threads (social media) post. Extract the following information and return ONLY valid JSON, no other text:
+EXTRACTION_PROMPT = """You are analyzing screenshot(s) of a Threads (social media) post. The images may show the post and/or its replies section. Extract the following information and return ONLY valid JSON, no other text:
 
 {
     "author_username": "the @username of the post author",
@@ -36,20 +36,31 @@ EXTRACTION_PROMPT = """You are analyzing a screenshot of a Threads (social media
     "views": <number or null>,
     "has_media": true/false,
     "media_type": "text|image|video|carousel|link",
+    "media_description": "describe what is in the image/video frame — people, text overlay, scene, mood (null if text-only)",
     "topic_category": "categorize: politics|entertainment|tech|lifestyle|food|sports|religion|gossip|news|personal|humor|other",
     "is_controversial": true/false,
     "has_hook": true/false,
     "hook_type": "question|bold_claim|how_to|story|controversial|list|none",
     "has_hashtags": true/false,
     "sentiment": "positive|negative|neutral|outrage|humorous",
-    "timestamp_visible": "the relative timestamp shown (e.g. '2h', '3d')"
+    "timestamp_visible": "the relative timestamp shown (e.g. '2h', '3d')",
+    "comments": [
+        {"author": "@username", "text": "comment text", "likes": <number or null>}
+    ],
+    "comments_summary": "2-3 sentence summary of the discussion — main arguments, sentiment, notable takes",
+    "discussion_sentiment": "supportive|mixed|hostile|debating|humorous|none",
+    "reply_insight": "what the replies reveal about audience reaction to this post"
 }
 
 Rules:
 - If a metric isn't visible or readable, use null
 - Numbers like "1.2K" = 1200, "5.6M" = 5600000
 - post_text should be the actual text, not a summary
-- Be accurate with numbers — read them carefully"""
+- Be accurate with numbers — read them carefully
+- comments: extract up to 5 visible comments/replies (empty array if none visible)
+- If no replies section is visible, set comments to [], and comments_summary/discussion_sentiment/reply_insight to null
+- media_description: describe what is actually visible — do not guess what is off-screen
+- For videos: describe the visible frame and any text overlay you can read"""
 
 
 def get_api_key() -> str:
@@ -68,7 +79,7 @@ def get_api_key() -> str:
 def _get_client(provider: str = "kimi") -> tuple[OpenAI, str]:
     cfg = PROVIDERS.get(provider, PROVIDERS["kimi"])
     return (
-        OpenAI(api_key=get_api_key(), base_url=cfg["base_url"], timeout=60),
+        OpenAI(api_key=get_api_key(), base_url=cfg["base_url"], timeout=120),
         cfg["model"],
     )
 
@@ -80,13 +91,11 @@ def _encode_image(image_path: str) -> str:
 
 def _parse_json_response(text: str) -> dict:
     """Extract JSON from LLM response, handling markdown code blocks."""
-    # Try direct parse first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # Try extracting from markdown code block
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:
         try:
@@ -94,7 +103,6 @@ def _parse_json_response(text: str) -> dict:
         except json.JSONDecodeError:
             pass
 
-    # Try finding JSON object in the text
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if match:
         try:
@@ -106,46 +114,48 @@ def _parse_json_response(text: str) -> dict:
 
 
 def analyze_screenshot(
-    image_path: str,
+    image_paths: str | list[str],
     provider: str = "kimi",
     prompt: str = None,
 ) -> dict:
-    """Send a screenshot to the vision LLM and get structured extraction.
+    """Send screenshot(s) to the vision LLM and get structured extraction.
 
+    Accepts a single path or a list of paths (e.g. post + replies screenshots).
     Returns dict with post data or error info.
     """
-    if not os.path.exists(image_path):
-        return {"error": f"File not found: {image_path}"}
+    if isinstance(image_paths, str):
+        image_paths = [image_paths]
+
+    for p in image_paths:
+        if not os.path.exists(p):
+            return {"error": f"File not found: {p}"}
 
     client, model = _get_client(provider)
-    b64 = _encode_image(image_path)
     actual_prompt = prompt or EXTRACTION_PROMPT
+
+    # Build content array: text prompt + all images
+    content = [{"type": "text", "text": actual_prompt}]
+    for p in image_paths:
+        b64 = _encode_image(p)
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/png;base64,{b64}"},
+        })
 
     try:
         resp = client.chat.completions.create(
             model=model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": actual_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/png;base64,{b64}"},
-                        },
-                    ],
-                }
-            ],
-            max_tokens=1000,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=2000,
             temperature=0.1,
         )
         raw = resp.choices[0].message.content
         result = _parse_json_response(raw)
-        result["_screenshot"] = image_path
+        result["_screenshot"] = image_paths[0]
         result["_provider"] = provider
         return result
     except Exception as e:
-        return {"error": str(e), "_screenshot": image_path, "_provider": provider}
+        return {"error": str(e), "_screenshot": image_paths[0], "_provider": provider}
 
 
 def check_page_type(image_path: str, provider: str = "kimi") -> str:

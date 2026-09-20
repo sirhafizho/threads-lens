@@ -174,15 +174,27 @@ async def _post(provider, headless, url):
 
         await browser.ensure_healthy()
 
-        screenshot = await browser.screenshot_post("single_post")
-        console.print(f"  Screenshot: {screenshot}")
+        # Screenshot post + scroll for replies
+        screenshots = [await browser.screenshot_post("single_post")]
+        await browser.scroll_for_replies()
+        screenshots.append(await browser.screenshot_post("single_post_replies"))
+        console.print(f"  Screenshots: {len(screenshots)} captured")
 
         with console.status("Analyzing with vision model..."):
-            data = await asyncio.to_thread(vision_analyze, screenshot, provider)
+            data = await asyncio.to_thread(vision_analyze, screenshots, provider)
 
         if "error" in data:
             console.print(f"[red]Error: {data['error']}[/red]")
         else:
+            media_desc = data.get("media_description", "")
+            media_info = f"\nMedia: {media_desc[:100]}" if media_desc else ""
+            comments = data.get("comments", [])
+            comments_info = f"\n\nTop comments ({len(comments)}):"
+            for c in comments[:5]:
+                comments_info += f"\n  @{c.get('author', '?')}: {c.get('text', '')[:100]}"
+            if data.get("comments_summary"):
+                comments_info += f"\n\n{data['comments_summary']}"
+
             console.print(Panel(
                 f"[bold]@{data.get('author_username', '?')}[/bold]\n\n"
                 f"{data.get('post_text', 'N/A')[:500]}\n\n"
@@ -193,7 +205,9 @@ async def _post(provider, headless, url):
                 f"Shares: {data.get('shares', '?')}\n\n"
                 f"Topic: {data.get('topic_category', '?')} | "
                 f"Sentiment: {data.get('sentiment', '?')} | "
-                f"Hook: {data.get('hook_type', '?')}",
+                f"Hook: {data.get('hook_type', '?')}"
+                f"{media_info}"
+                f"{comments_info}",
                 title="[bold cyan]Post Analysis[/bold cyan]",
             ))
     finally:
