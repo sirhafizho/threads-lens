@@ -223,8 +223,13 @@ async def search_and_collect(
 
     console.print(f"\n[bold]Collecting {min(len(all_urls), max_posts)} posts[/bold]")
 
+    import random
     for i, url in enumerate(all_urls[:max_posts]):
         console.print(f"\n  [{i + 1}/{min(len(all_urls), max_posts)}] {url}")
+
+        if i > 0:
+            # Human-like pause between posts (1-4s)
+            await asyncio.sleep(random.uniform(1.0, 4.0))
 
         if not await browser.goto(url, wait=3):
             session.add_error(url, "navigation_failed")

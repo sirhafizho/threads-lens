@@ -59,7 +59,9 @@ class ThreadsBrowser:
         """Navigate to a URL. Returns True if page loaded."""
         try:
             await self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(wait)
+            # Human-like jitter — don't be a metronome
+            import random
+            await asyncio.sleep(wait + random.uniform(0.5, 2.0))
             return True
         except Exception as e:
             console.print(f"  [red]Navigation failed: {e}[/red]")
@@ -80,9 +82,11 @@ class ThreadsBrowser:
         return str(path)
 
     async def scroll_down(self, amount: int = 800):
-        """Scroll the page down."""
-        await self.page.mouse.wheel(0, amount)
-        await asyncio.sleep(1.5)
+        """Scroll the page down with human-like variance."""
+        import random
+        jitter = int(amount * random.uniform(0.7, 1.3))
+        await self.page.mouse.wheel(0, jitter)
+        await asyncio.sleep(random.uniform(0.8, 2.5))
 
     async def scroll_for_replies(self, scrolls: int = 2):
         """Scroll down to reveal the replies section on a post page."""
