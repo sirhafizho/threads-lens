@@ -102,22 +102,23 @@ class ThreadsBrowser:
         url = self.page.url
         content = (await self.page.content()).lower()
 
-        if "log in" in content and ("sign up" in content or "create account" in content):
-            login_elements = await self.page.query_selector_all(
-                'div[role="dialog"], div[class*="login"], div[class*="Login"]'
-            )
-            if login_elements:
-                return "login_wall"
-
-        if "captcha" in content or "verify" in content:
+        # Real CAPTCHA iframes — not just "verified" badges
+        captcha_iframes = await self.page.query_selector_all(
+            'iframe[src*="captcha"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]'
+        )
+        if captcha_iframes:
             return "captcha"
 
-        if "something went wrong" in content or "error" in url:
-            return "error_page"
+        # Login wall — must be a blocking dialog, not just "log in" text in footer
+        if "log in" in content and ("sign up" in content or "create account" in content):
+            login_dialogs = await self.page.query_selector_all(
+                'div[role="dialog"] a[href*="login"], div[role="dialog"] button'
+            )
+            if login_dialogs:
+                return "login_wall"
 
-        dialogs = await self.page.query_selector_all('div[role="dialog"]')
-        if dialogs:
-            return "popup_dialog"
+        if "something went wrong" in content and "try again" in content:
+            return "error_page"
 
         return None
 
