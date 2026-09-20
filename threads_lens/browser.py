@@ -30,11 +30,16 @@ class ThreadsBrowser:
         SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
     async def start(self) -> Page:
-        """Launch browser with persistent profile. Returns the main page."""
+        """Launch browser with persistent profile. Returns the main page.
+
+        Uses your system Google Chrome (channel='chrome') instead of bundled
+        Chromium, so existing login sessions carry over — no need to log in again.
+        """
         self.playwright = await async_playwright().start()
         self.context = await self.playwright.chromium.launch_persistent_context(
             user_data_dir=str(PROFILE_DIR),
             headless=self.headless,
+            channel="chrome",
             viewport={"width": 1280, "height": 900},
             args=[
                 "--disable-blink-features=AutomationControlled",
