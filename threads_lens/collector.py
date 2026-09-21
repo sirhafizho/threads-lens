@@ -11,7 +11,8 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .browser import ThreadsBrowser
-from .vision import analyze_screenshot, check_page_type
+from .hybrid import extract_post
+from .vision import check_page_type
 
 console = Console()
 OUTPUT_DIR = Path.home() / ".threads-lens" / "sessions"
@@ -148,23 +149,22 @@ async def _handle_post_issue(browser: ThreadsBrowser, session: CollectionResult,
     return False
 
 
-async def _capture_post_and_replies(browser: ThreadsBrowser, name: str) -> list[str]:
-    """Screenshot the post, scroll to replies, screenshot replies. Returns list of paths."""
-    paths = [await browser.screenshot_post(name)]
-    await browser.scroll_for_replies()
-    paths.append(await browser.screenshot_post(f"{name}_replies"))
-    return paths
+async def _capture_post(browser: ThreadsBrowser, name: str) -> tuple[str, str]:
+    """Get DOM text + screenshot. Returns (page_text, screenshot_path)."""
+    page_text = await browser.page.inner_text("body")
+    screenshot = await browser.screenshot_post(name)
+    return page_text, screenshot
 
 
-async def _analyze(screenshots: str | list[str], provider: str, label: str = "Analyzing...") -> dict:
-    """Run vision analysis with a spinner."""
+async def _analyze(page_text: str, screenshot: str, provider: str, label: str = "Analyzing...") -> dict:
+    """Run hybrid extraction (DOM + minimal vision) with a spinner."""
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         console=console,
     ) as progress:
         task = progress.add_task(f"  {label}", total=None)
-        data = await asyncio.to_thread(analyze_screenshot, screenshots, provider)
+        data = await extract_post(page_text, screenshot, provider)
         progress.update(task, description="[green]Done!")
     return data
 
@@ -238,18 +238,18 @@ async def search_and_collect(
         if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshots = await _capture_post_and_replies(browser, f"post_{i + 1}")
-        data = await _analyze(screenshots, provider, "Analyzing with vision model...")
+        page_text, screenshot = await _capture_post(browser, f"post_{i + 1}")
+        data = await _analyze(page_text, screenshot, provider, "Extracting...")
 
         if "error" in data or data.get("parse_error"):
             console.print(f"    [yellow]Extraction issue: {data.get('error', 'parse error')}[/yellow]")
             session.add_error(url, data.get("error", "parse_error"))
             if "raw_response" in data:
-                session.add_post(data, url, screenshots[0])
+                session.add_post(data, url, screenshot)
         else:
             comments = len(data.get("comments", []))
-            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {data.get('replies', '?')} replies, {comments} comments read")
-            session.add_post(data, url, screenshots[0])
+            console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {data.get('replies', '?')} replies, {comments} comments")
+            session.add_post(data, url, screenshot)
 
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")
@@ -306,13 +306,13 @@ async def browse_trending(
         if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshots = await _capture_post_and_replies(browser, f"trending_{i + 1}")
-        data = await _analyze(screenshots, provider)
+        page_text, screenshot = await _capture_post(browser, f"trending_{i + 1}")
+        data = await _analyze(page_text, screenshot, provider)
 
         if "error" not in data:
             comments = len(data.get("comments", []))
             console.print(f"    @{data.get('author_username', '?')} — {data.get('likes', '?')} likes, {comments} comments")
-        session.add_post(data, url, screenshots[0])
+        session.add_post(data, url, screenshot)
 
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")
@@ -372,13 +372,13 @@ async def analyze_profile(
         if not await _handle_post_issue(browser, session, interactive):
             break
 
-        screenshots = await _capture_post_and_replies(browser, f"profile_{i + 1}")
-        data = await _analyze(screenshots, provider)
+        page_text, screenshot = await _capture_post(browser, f"profile_{i + 1}")
+        data = await _analyze(page_text, screenshot, provider)
 
         if "error" not in data:
             comments = len(data.get("comments", []))
             console.print(f"    {data.get('likes', '?')} likes, {data.get('replies', '?')} replies, {comments} comments")
-        session.add_post(data, url, screenshots[0])
+        session.add_post(data, url, screenshot)
 
     md_path = session.save()
     console.print(f"\n[green]Session saved: {md_path}[/green]")

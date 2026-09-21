@@ -179,7 +179,7 @@ def post(ctx, url, save):
 
 
 async def _post(provider, headless, url):
-    from .vision import analyze_screenshot as vision_analyze
+    from .hybrid import extract_post
 
     browser = await get_browser(headless=headless)
     try:
@@ -189,14 +189,13 @@ async def _post(provider, headless, url):
 
         await browser.ensure_healthy()
 
-        # Screenshot post + scroll for replies
-        screenshots = [await browser.screenshot_post("single_post")]
-        await browser.scroll_for_replies()
-        screenshots.append(await browser.screenshot_post("single_post_replies"))
-        console.print(f"  Screenshots: {len(screenshots)} captured")
+        # Get DOM text + screenshot for hybrid extraction
+        page_text = await browser.page.inner_text("body")
+        screenshot = await browser.screenshot_post("single_post")
+        console.print("  Captured post data")
 
-        with console.status("Analyzing with vision model..."):
-            data = await asyncio.to_thread(vision_analyze, screenshots, provider)
+        with console.status("Extracting..."):
+            data = await extract_post(page_text, screenshot, provider)
 
         if "error" in data:
             console.print(f"[red]Error: {data['error']}[/red]")
